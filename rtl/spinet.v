@@ -1,35 +1,68 @@
+module spinet6 (
+	input clk,
+	input rst,
+	output [5:0] txready,
+	output [5:0] rxready,
+	input [5:0] MOSI, SCK, SS,
+	output [5:0] MISO
+	);
+	spinet #(.N(6)) SPINET (clk, rst, txready, rxready, MOSI, SCK, SS, MISO);
+endmodule
+
 module spinet #(parameter N=8, WIDTH=16, ABITS=3) (
 	input clk,
 	input rst,
 	output [N-1:0] txready,
 	output [N-1:0] rxready,
-	input [N-1:0] MOSI, SCK, SS,
-	output [N-1:0] MISO,
-	output [8*N-1:0] peek
+	input [N-1:0] MOSI, SCLK, SS,
+	output [N-1:0] MISO
 	);
 
 	wire [WIDTH-1:0] r[N-1:0];
 	genvar i;
 	generate for (i = 0; i < N; i = i+1) begin
-		wire [WIDTH-1:0] txdata, rxdata;
-		wire mosivalid, mosiack, misovalid, misoack;
-		wire [ABITS-1:0] adr = i;
-		ringnode #(.WIDTH(WIDTH), .ABITS(ABITS), .ADDRESS(i)) NODE (
+		spinode #(.WIDTH(WIDTH), .ABITS(ABITS), .ADDRESS(i)) NODE (
 			.clk(clk),
 			.rst(rst),
 			.fromring(r[(i+N-1)%N]),
 			.toring(r[i]),
-			.fromclient(rxdata),
-			.toclient(txdata),
 			.txready(txready[i]),
 			.rxready(rxready[i]),
+			.MOSI(MOSI[i]),
+			.SCLK(SCLK[i]),
+			.SS(SS[i]),
+			.MISO(MISO[i])
+		);
+	end endgenerate
+endmodule
+
+module spinode #(parameter WIDTH=16, ABITS=3, ADDRESS=0) (
+	input clk,
+	input rst,
+	input [WIDTH-1:0] fromring,
+	output [WIDTH-1:0] toring,
+	output txready, rxready,
+	input SCLK, SS, MOSI,
+	output MISO
+);
+
+	wire [WIDTH-1:0] txdata, rxdata;
+	wire mosivalid, mosiack, misovalid, misoack;
+		ringnode #(.WIDTH(WIDTH), .ABITS(ABITS), .ADDRESS(ADDRESS)) NODE (
+			.clk(clk),
+			.rst(rst),
+			.fromring(fromring),
+			.toring(toring),
+			.fromclient(rxdata),
+			.toclient(txdata),
+			.txready(txready),
+			.rxready(rxready),
 			.misovalid(misovalid),
 			.misoack(misoack),
 			.mosivalid(mosivalid),
-			.mosiack(mosiack),
-			.peek(peek[8*i+:8])
+			.mosiack(mosiack)
 		);
-		spislave #(.WIDTH(WIDTH)) SPI (
+		ringspi #(.WIDTH(WIDTH)) SPI (
 			.rst(rst),
 			.txdata(txdata),
 			.rxdata(rxdata),
@@ -37,12 +70,11 @@ module spinet #(parameter N=8, WIDTH=16, ABITS=3) (
 			.misoack(misoack),
 			.mosivalid(mosivalid),
 			.mosiack(mosiack),
-			.MOSI(MOSI[i]),
-			.CK(SCK[i]),
-			.SS(SS[i]),
-			.MISO(MISO[i])
+			.MOSI(MOSI),
+			.SCLK(SCLK),
+			.SS(SS),
+			.MISO(MISO)
 		);
-	end endgenerate
 endmodule
 
 module ringnode #(parameter WIDTH=16, ABITS=3, ADDRESS=0) (
@@ -54,8 +86,7 @@ module ringnode #(parameter WIDTH=16, ABITS=3, ADDRESS=0) (
 	output [WIDTH-1:0] toclient,
 	output txready, rxready,
 	input mosivalid, misoack,
-	output reg mosiack, misovalid,
-	output [7:0] peek
+	output reg mosiack, misovalid
 	);
 
 	wire [ABITS-1:0] address = ADDRESS;
@@ -82,7 +113,6 @@ module ringnode #(parameter WIDTH=16, ABITS=3, ADDRESS=0) (
 	reg xmit, recv, seize;
 
 	reg [WIDTH-1:0] outpkt;
-	assign peek = fromclient[7:0];
 	always @(*) begin
 		outpkt = fromring;
 		xmit = 0;
@@ -136,9 +166,9 @@ module ringnode #(parameter WIDTH=16, ABITS=3, ADDRESS=0) (
 	end
 endmodule
 
-module spislave #(parameter WIDTH=16) (
+module ringspi #(parameter WIDTH=16) (
 	input rst,
-	input CK, SS, MOSI,
+	input SCLK, SS, MOSI,
 	output MISO,
 	input misovalid,
 	output reg misoack,
@@ -156,7 +186,7 @@ module spislave #(parameter WIDTH=16) (
 	assign rxdata = inbuf;
 
 	// capture incoming data on falling clock edge
-	always @(negedge CK or posedge rst)
+	always @(negedge SCLK or posedge rst)
 		if (rst) begin
 			bitcount <= 0;
 			shiftreg[0] <= 0;
@@ -175,7 +205,7 @@ module spislave #(parameter WIDTH=16) (
 		end
 
 	// set up next outgoing data on rising clock edge
-	always @(posedge CK or posedge rst)
+	always @(posedge SCLK or posedge rst)
 		if (rst) begin
 			shiftreg[WIDTH:1] <= 0;
 			misoack <= 0;
