@@ -48,6 +48,8 @@ module spinode #(parameter WIDTH=16, ABITS=3, ADDRESS=0) (
 
 	wire [WIDTH-1:0] txdata, rxdata;
 	wire mosivalid, mosiack, misovalid, misoack;
+	wire [WIDTH-1:0] fifo_d, fifo_q;
+	wire fifo_empty, fifo_full, fifo_rd, fifo_wr;
 		ringnode #(.WIDTH(WIDTH), .ABITS(ABITS), .ADDRESS(ADDRESS)) NODE (
 			.clk(clk),
 			.rst(rst),
@@ -60,7 +62,13 @@ module spinode #(parameter WIDTH=16, ABITS=3, ADDRESS=0) (
 			.misovalid(misovalid),
 			.misoack(misoack),
 			.mosivalid(mosivalid),
-			.mosiack(mosiack)
+			.mosiack(mosiack),
+			.fifo_d(fifo_d),
+			.fifo_q(fifo_q),
+			.fifo_empty(fifo_empty),
+			.fifo_full(fifo_full),
+			.fifo_rd(fifo_rd),
+			.fifo_wr(fifo_wr)
 		);
 		ringspi #(.WIDTH(WIDTH)) SPI (
 			.rst(rst),
@@ -75,6 +83,16 @@ module spinode #(parameter WIDTH=16, ABITS=3, ADDRESS=0) (
 			.SS(SS),
 			.MISO(MISO)
 		);
+		fifo #(.WIDTH(WIDTH), .DEPTH(16)) FIFO (
+			.clk(clk),
+			.rst(rst),
+			.d(fifo_d),
+			.q(fifo_q),
+			.empty(fifo_empty),
+			.full(fifo_full),
+			.rd(fifo_rd),
+			.wr(fifo_wr)
+		);
 endmodule
 
 module ringnode #(parameter WIDTH=16, ABITS=3, ADDRESS=0) (
@@ -86,7 +104,12 @@ module ringnode #(parameter WIDTH=16, ABITS=3, ADDRESS=0) (
 	output [WIDTH-1:0] toclient,
 	output txready, rxready,
 	input mosivalid, misoack,
-	output reg mosiack, misovalid
+	output reg mosiack, misovalid,
+	output [WIDTH-1:0] fifo_d,
+	input [WIDTH-1:0] fifo_q,
+	input fifo_empty, fifo_full,
+	output reg fifo_rd,
+	output fifo_wr
 	);
 
 	wire [ABITS-1:0] address = ADDRESS;
@@ -106,11 +129,13 @@ module ringnode #(parameter WIDTH=16, ABITS=3, ADDRESS=0) (
 
 	reg [WIDTH-1:0] rxbuf, txbuf, ringbuf;
 	reg busy;
+	reg xmit, recv, seize;	// combinational signals
 	assign toring = ringbuf;
 	assign toclient = rxbuf;
 	assign rxready = rxbuf[FULL];
 	assign txready = ~txbuf[FULL];
-	reg xmit, recv, seize;
+	assign fifo_wr = recv;
+	assign fifo_d = fromring;
 
 	reg [WIDTH-1:0] outpkt;
 	always @(*) begin
@@ -127,7 +152,7 @@ module ringnode #(parameter WIDTH=16, ABITS=3, ADDRESS=0) (
 				seize = 1;
 			end
 		2'b10, 2'b11:  // payload - return ack to sender
-			if (fromring[DST +: ABITS] == address && !rxbuf[FULL]) begin
+			if (fromring[DST +: ABITS] == address && !fifo_full) begin
 				outpkt[FULL:ACK] = 2'b01;
 				recv = 1;
 			end
@@ -147,10 +172,13 @@ module ringnode #(parameter WIDTH=16, ABITS=3, ADDRESS=0) (
 		busy <= 0;
 		mosiack <= 0;
 		misovalid <= 0;
+		fifo_rd <= 0;
 	end else begin
 		ringbuf <= outpkt;
-		if (recv) begin
-			rxbuf <= fromring;
+		fifo_rd <= 0;
+		if (rxbuf[FULL] == 0 && !fifo_empty) begin
+			fifo_rd <= 1;
+			rxbuf <= fifo_q;
 			misovalid <= ~misovalid;
 		end else if (misoack_sync[1] == misovalid)
 			rxbuf[FULL] <= 0;
