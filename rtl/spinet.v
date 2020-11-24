@@ -186,12 +186,11 @@ module ringspi #(parameter WIDTH=16) (
 	assign rxdata = inbuf;
 
 	// capture incoming data on falling clock edge
-	always @(negedge SCLK or posedge rst)
-		if (rst) begin
+	always @(negedge SCLK or posedge SS)
+		if (SS) begin
 			bitcount <= 0;
 			shiftreg[0] <= 0;
-			mosivalid <= 0;
-		end else if (~SS) begin
+		end else begin
 			if (bitcount != WIDTH-1) begin
 				bitcount <= bitcount + 1;
 				shiftreg[0] <= MOSI;
@@ -199,24 +198,38 @@ module ringspi #(parameter WIDTH=16) (
 				bitcount <= 0;
 				if (mosiack == mosivalid) begin
 					inbuf <= {shiftreg[WIDTH-1:1],MOSI};
-					mosivalid = ~mosivalid;
 				end
 			end
 		end
 
 	// set up next outgoing data on rising clock edge
-	always @(posedge SCLK or posedge rst)
-		if (rst) begin
+	always @(posedge SCLK or posedge SS)
+		if (SS) begin
 			shiftreg[WIDTH:1] <= 0;
-			misoack <= 0;
-		end else if (~SS) begin
+		end else begin
 			if (bitcount == 0) begin
 				if (misovalid != misoack) begin
 					shiftreg[WIDTH:1] <= txdata;
-					misoack <= ~misoack;
 				end else
 					shiftreg[WIDTH:1] <= 0;
 			end else
 				shiftreg[WIDTH:1] <= shiftreg[WIDTH-1:0];
 		end
+
+	// handshake with node
+	always @(negedge SCLK or posedge rst)
+		if (rst) begin
+			mosivalid <= 0;
+		end else begin
+			if (bitcount == WIDTH-1 && mosiack == mosivalid)
+				mosivalid <= ~mosivalid;
+		end
+	always @(posedge SCLK or posedge rst)
+		if (rst) begin
+			misoack <= 0;
+		end else begin
+			if (bitcount == 0 && misovalid != misoack)
+				misoack <= ~misoack;
+		end
+
 endmodule
