@@ -48,8 +48,10 @@ module spinode #(parameter WIDTH=16, ABITS=3, ADDRESS=0) (
 
 	wire [WIDTH-1:0] txdata, rxdata;
 	wire mosivalid, mosiack, misovalid, misoack;
-	wire [WIDTH-1:0] fifo_d, fifo_q;
-	wire fifo_empty, fifo_full, fifo_rd, fifo_wr;
+	wire [WIDTH-1:0] txfifo_d, txfifo_q;
+	wire txfifo_empty, txfifo_full, txfifo_rd, txfifo_wr;
+	wire [WIDTH-1:0] rxfifo_d, rxfifo_q;
+	wire rxfifo_empty, rxfifo_full, rxfifo_rd, rxfifo_wr;
 		ringnode #(.WIDTH(WIDTH), .ABITS(ABITS), .ADDRESS(ADDRESS)) NODE (
 			.clk(clk),
 			.rst(rst),
@@ -63,12 +65,18 @@ module spinode #(parameter WIDTH=16, ABITS=3, ADDRESS=0) (
 			.misoack(misoack),
 			.mosivalid(mosivalid),
 			.mosiack(mosiack),
-			.fifo_d(fifo_d),
-			.fifo_q(fifo_q),
-			.fifo_empty(fifo_empty),
-			.fifo_full(fifo_full),
-			.fifo_rd(fifo_rd),
-			.fifo_wr(fifo_wr)
+			.txfifo_d(txfifo_d),
+			.txfifo_q(txfifo_q),
+			.txfifo_empty(txfifo_empty),
+			.txfifo_full(txfifo_full),
+			.txfifo_rd(txfifo_rd),
+			.txfifo_wr(txfifo_wr),
+			.rxfifo_d(rxfifo_d),
+			.rxfifo_q(rxfifo_q),
+			.rxfifo_empty(rxfifo_empty),
+			.rxfifo_full(rxfifo_full),
+			.rxfifo_rd(rxfifo_rd),
+			.rxfifo_wr(rxfifo_wr)
 		);
 		ringspi #(.WIDTH(WIDTH)) SPI (
 			.rst(rst),
@@ -83,15 +91,26 @@ module spinode #(parameter WIDTH=16, ABITS=3, ADDRESS=0) (
 			.SS(SS),
 			.MISO(MISO)
 		);
-		fifo #(.WIDTH(WIDTH), .DEPTH(16)) FIFO (
+		genvar i;
+		fifo #(.WIDTH(WIDTH), .DEPTH(16)) TXFIFO (
 			.clk(clk),
 			.rst(rst),
-			.d(fifo_d),
-			.q(fifo_q),
-			.empty(fifo_empty),
-			.full(fifo_full),
-			.rd(fifo_rd),
-			.wr(fifo_wr)
+			.d(txfifo_d),
+			.q(txfifo_q),
+			.empty(txfifo_empty),
+			.full(txfifo_full),
+			.rd(txfifo_rd),
+			.wr(txfifo_wr)
+		);
+		fifo #(.WIDTH(WIDTH), .DEPTH(16)) RXFIFO (
+			.clk(clk),
+			.rst(rst),
+			.d(rxfifo_d),
+			.q(rxfifo_q),
+			.empty(rxfifo_empty),
+			.full(rxfifo_full),
+			.rd(rxfifo_rd),
+			.wr(rxfifo_wr)
 		);
 endmodule
 
@@ -105,11 +124,12 @@ module ringnode #(parameter WIDTH=16, ABITS=3, ADDRESS=0) (
 	output txready, rxready,
 	input mosivalid, misoack,
 	output reg mosiack, misovalid,
-	output [WIDTH-1:0] fifo_d,
-	input [WIDTH-1:0] fifo_q,
-	input fifo_empty, fifo_full,
-	output reg fifo_rd,
-	output fifo_wr
+	output [WIDTH-1:0] txfifo_d, rxfifo_d,
+	input [WIDTH-1:0] txfifo_q, rxfifo_q,
+	input txfifo_empty, rxfifo_empty,
+	input txfifo_full, rxfifo_full,
+	output reg txfifo_rd, rxfifo_rd,
+	output txfifo_wr, rxfifo_wr
 	);
 
 	wire [ABITS-1:0] address = ADDRESS;
@@ -129,13 +149,16 @@ module ringnode #(parameter WIDTH=16, ABITS=3, ADDRESS=0) (
 
 	reg [WIDTH-1:0] rxbuf, txbuf, ringbuf;
 	reg busy;
+	reg txwrite;
 	reg xmit, recv, seize;	// combinational signals
 	assign toring = ringbuf;
 	assign toclient = rxbuf;
 	assign rxready = rxbuf[FULL];
-	assign txready = ~txbuf[FULL];
-	assign fifo_wr = recv;
-	assign fifo_d = fromring;
+	assign txready = ~txfifo_full;
+	assign rxfifo_wr = recv;
+	assign txfifo_wr = txwrite;
+	assign rxfifo_d = fromring;
+	assign txfifo_d = txbuf;
 
 	reg [WIDTH-1:0] outpkt;
 	always @(*) begin
@@ -145,14 +168,14 @@ module ringnode #(parameter WIDTH=16, ABITS=3, ADDRESS=0) (
 		seize = 0;
 		case (fromring[FULL:ACK])
 		2'b00:	       // free slot - transmit if ready
-			if (txbuf[FULL] & ~busy) begin
-				outpkt = txbuf;
+			if (~txfifo_empty & ~busy) begin
+				outpkt = txfifo_q;
 				outpkt[SRC +: ABITS] = address;
 				outpkt[FULL] = 1;
 				seize = 1;
 			end
 		2'b10, 2'b11:  // payload - return ack to sender
-			if (fromring[DST +: ABITS] == address && !fifo_full) begin
+			if (fromring[DST +: ABITS] == address && !rxfifo_full) begin
 				outpkt[FULL:ACK] = 2'b01;
 				recv = 1;
 			end
@@ -172,24 +195,34 @@ module ringnode #(parameter WIDTH=16, ABITS=3, ADDRESS=0) (
 		busy <= 0;
 		mosiack <= 0;
 		misovalid <= 0;
-		fifo_rd <= 0;
+		rxfifo_rd <= 0;
+		txfifo_rd <= 0;
+		txwrite <= 0;
 	end else begin
 		ringbuf <= outpkt;
-		fifo_rd <= 0;
-		if (rxbuf[FULL] == 0 && !fifo_empty) begin
-			fifo_rd <= 1;
-			rxbuf <= fifo_q;
+		rxfifo_rd <= 0;	// default
+		txfifo_rd <= 0; // default
+		txwrite <= 0;	// default
+		// packets from net to client
+		if (rxbuf[FULL] == 0 && !rxfifo_empty) begin
+			rxfifo_rd <= 1;
+			rxbuf <= rxfifo_q;
 			misovalid <= ~misovalid;
 		end else if (misoack_sync[1] == misovalid)
 			rxbuf[FULL] <= 0;
+		// packets from client to net
 		if (mosivalid_sync[1] != mosiack) begin
 			txbuf <= fromclient;
 			mosiack <= ~mosiack;
-		end else if (xmit)
+		end else if (txbuf[FULL] & ~txfifo_full) begin
+			txwrite <= 1;
 			txbuf[FULL] <= 0;
-		if (seize)
+		end
+		// limit one packet in transit per sender
+		if (seize) begin
+			txfifo_rd <= 1;
 			busy <= 1;
-		else if (xmit)
+		end else if (xmit)
 			busy <= 0;
 	end
 endmodule
