@@ -16,6 +16,24 @@ module spinet6 (
 	);
 endmodule
 
+module spinet5 (
+	input clk,
+	input rst,
+	input [37:0] io_in,
+	output [37:0] io_out
+	);
+	spinet #(.N(5)) SPINET (
+		.clk(clk),
+		.rst(rst),
+		.MOSI   ({io_in[ 8],io_in[14],io_in[20],io_in[26],io_in[32]}),
+		.SCLK   ({io_in[ 9],io_in[15],io_in[21],io_in[27],io_in[33]}),
+		.SS     ({io_in[10],io_in[16],io_in[22],io_in[28],io_in[34]}),
+		.MISO   ({io_out[11],io_out[17],io_out[23],io_out[29],io_out[35]}),
+		.txready({io_out[12],io_out[18],io_out[24],io_out[30],io_out[36]}),
+		.rxready({io_out[13],io_out[19],io_out[25],io_out[31],io_out[37]}) 
+	);
+endmodule
+
 module spinet #(parameter N=8, WIDTH=16, ABITS=3) (
 	input clk,
 	input rst,
